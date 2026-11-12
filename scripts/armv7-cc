@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# armv7-cc — a "cc" for 32-bit ARM (armv7-a, NEON, hard-float) built on clang +
+# an armhf sysroot, for tools that take a single compiler (build-guest.sh --cc,
+# emitter-fuzz.py --cc).  The sysroot has glibc's crt files but no gcc runtime
+# (crtbegin*.o / libgcc.a), so a link is assembled by hand, exactly as
+# build-armv7.sh does: glibc crt1/crti/crtn and libgcc_s.so.1 for __aeabi_*.
+# Run the result with:  qemu-arm -L "$ARMHF_SYSROOT" <binary>
+set -euo pipefail
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")/a64port-env.sh"
+SR=$ARMHF_SYSROOT
+L=$SR/usr/lib/arm-linux-gnueabihf
+# ARM_CPU as in build-armv7.sh (default: Cortex-A17, Thumb-2).
+read -r -a CPU <<< "${ARM_CPU:--mcpu=cortex-a17 -mthumb}"
+TGT=(--target=arm-linux-gnueabihf "${CPU[@]}" -mfpu=neon-vfpv4 -mfloat-abi=hard --sysroot="$SR"
+     -ffp-contract=off -D_FILE_OFFSET_BITS=64 -D_TIME_BITS=64)
+# ARMV7_EXTRA: more compile flags (e.g. -DA64PORT_FASTMEM); ARMV7_LDEXTRA: link
+# flags (e.g. -Wl,--image-base=0x20000000, so a fastmem guest's identity range
+# below it stays free).
+read -r -a EXTRA <<< "${ARMV7_EXTRA:-}"
+read -r -a LDEXTRA <<< "${ARMV7_LDEXTRA:-}"
+TGT+=("${EXTRA[@]}")
+for a in "$@"; do
+    case "$a" in -c|-S|-E|-M|-MM) exec clang "${TGT[@]}" "$@" ;; esac
+done
+exec clang "${TGT[@]}" -fuse-ld=lld -no-pie -nostartfiles -nodefaultlibs "${LDEXTRA[@]}" \
+    "$L/crt1.o" "$L/crti.o" "$@" -L"$L" -lpthread -ldl -lm -lc -l:libgcc_s.so.1 "$L/crtn.o"
